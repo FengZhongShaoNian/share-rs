@@ -2,13 +2,18 @@ use crate::single_instance::NextStep::{Abort, Continue};
 use anyhow::Error;
 use futures::channel::mpsc;
 use futures::channel::mpsc::UnboundedReceiver;
-use log::error;
+use log::{error, info};
 use serde_json::json;
 use std::env;
-use std::os::unix::net::UnixDatagram;
+use std::io::{Read, Write};
+use std::net::Shutdown;
 use std::thread::spawn;
 
-const SOCKET_PATH: &'static str = "/tmp/share-rs.socket";
+#[cfg(windows)]
+use uds_windows::{UnixStream, UnixListener};
+
+#[cfg(unix)]
+use std::os::unix::net::{UnixStream, UnixListener};
 
 #[derive(Debug)]
 pub enum NextStep {
@@ -24,24 +29,29 @@ pub struct OpenRequest {
 // 如果已经有进行存在，那么将启动参数发送给已存在的进程处理
 // 如果没有已存在的进程，那么监听指定的socket，当有人
 pub fn check_single_instance() -> anyhow::Result<NextStep> {
+    let socket_path = dirs::cache_dir().ok_or(anyhow::anyhow!("no cache dir"))?;
+    let socket_path =  socket_path.join("share-rs.socket");
+    info!("checking single instance, socket path: {}", socket_path.display());
+
     // remove the socket if the process listening on it has died
-    if let Err(e) = UnixDatagram::unbound()?.connect(SOCKET_PATH) {
+    if let Err(e) = UnixStream::connect(&socket_path) {
         if e.kind() == std::io::ErrorKind::ConnectionRefused {
-            std::fs::remove_file(SOCKET_PATH)?;
+            std::fs::remove_file(&socket_path)?;
         }
     }
 
-    match UnixDatagram::bind(SOCKET_PATH) {
-        Ok(socket) => {
+    match UnixListener::bind(&socket_path) {
+        Ok(listener) => {
             let (tx, rx) = mpsc::unbounded();
             spawn(move || {
-                let mut buf = vec![0; 1024];
-                loop {
-                    match socket.recv(buf.as_mut_slice()) {
-                        Ok(len) => {
-                            let json_str = String::from_utf8_lossy(&buf[..len]).to_string();
+                for stream in listener.incoming() {
+                    match stream {
+                        Ok(mut stream) => {
+                            let mut response = String::new();
+                            stream.read_to_string(&mut response).unwrap();
+
                             let parsed: serde_json::error::Result<Vec<String>> =
-                                serde_json::from_str(&json_str);
+                                serde_json::from_str(&response);
                             match parsed {
                                 Ok(args) => {
                                     let result = tx.unbounded_send(OpenRequest { args });
@@ -52,16 +62,12 @@ pub fn check_single_instance() -> anyhow::Result<NextStep> {
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to parse {} to Vec<String>, {}", json_str, e);
+                                    error!("Failed to parse {} to Vec<String>, {}", response, e);
                                 }
                             }
                         }
-                        Err(e) => {
-                            error!(
-                                "Failed to recv from socket {}, {}",
-                                SOCKET_PATH,
-                                e.to_string()
-                            );
+                        Err(err) => {
+                            error!("Failed to accept client: {}", err);
                         }
                     }
                 }
@@ -73,7 +79,9 @@ pub fn check_single_instance() -> anyhow::Result<NextStep> {
                 let args: Vec<String> = env::args().collect();
                 let args = json!(args);
                 let args = serde_json::to_string(&args)?;
-                UnixDatagram::unbound()?.send_to(args.as_bytes(), SOCKET_PATH)?;
+                let mut stream = UnixStream::connect(&socket_path)?;
+                stream.write_all(args.as_bytes())?;
+                stream.shutdown(Shutdown::Both)?;
                 Ok(Abort)
             } else {
                 Err(Error::from(e))
