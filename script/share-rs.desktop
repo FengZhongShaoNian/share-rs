@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Share
+Icon=share
+Exec=/home/one/Workspace/rust/share-rs/target/debug/share-rs %U
+Comment=Share files
+Categories=Network
+Terminal=false
+StartupNotify=true

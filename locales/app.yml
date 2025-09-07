@@ -1,0 +1,40 @@
+_version: 2
+tooltip.server-switch-on:
+  en: The server is up and you can turn it off by clicking on the switch
+  zh-CN: 服务器已启动，点击开关可关闭它
+tooltip.server-switch-off:
+  en: The server is down, click the switch to start it
+  zh-CN: 服务器未启动，点击开关可启动它
+tooltip.add-file-button:
+  en: Click to add files
+  zh-CN: 点击添加文件
+tooltip.server-info-button:
+  en: Click to view server information
+  zh-CN: 点击查看服务器信息
+tooltip.setting-button:
+  en: Click to open settings
+  zh-CN: 点击打开设置
+tooltip.remove-file-from-share-list:
+  en: Remove file from share list
+  zh-CN: 从分享列表中移除文件
+tooltip.open-file-in-file-manager:
+  en: Open file in system file manager
+  zh-CN: 在系统的文件管理器中打开此文件
+label.settings:
+  en: Settings
+  zh-CN: 设置
+label.server-port:
+  en: "Server port:"
+  zh-CN: "端口号:"
+label.upload-folder:
+  en: "Upload Folder:"
+  zh-CN: "上传文件夹:"
+label.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+label.save:
+  en: "Save"
+  zh-CN: "保存"
+label.server-info:
+  en: "Server Info"
+  zh-CN: "服务器信息"
