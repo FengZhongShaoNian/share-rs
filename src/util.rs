@@ -311,7 +311,7 @@ pub async fn check_file<P: AsRef<Path>>(
     let hash = compute_file_hash(&file_path)
         .await
         .context("Failed to check file hash")?;
-    if (hash == expected_hash) {
+    if hash == expected_hash {
         Ok(CheckFileResult::Valid)
     } else {
         Ok(CheckFileResult::Invalid(format!(
