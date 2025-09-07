@@ -1,3 +1,4 @@
+use gpui::prelude::FluentBuilder;
 use crate::backend::db::DatabaseSource;
 use crate::backend::entities::shares;
 use crate::backend::web::server::{ServerState, ShareServer};
@@ -332,6 +333,10 @@ impl TitleBar {
 impl Render for TitleBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::global(cx);
+        let mut show_custom_window_control= false;
+        if cfg!(target_os = "linux") {
+            show_custom_window_control = true;
+        }
         h_flex()
             .id("title-bar")
             .w_full()
@@ -358,6 +363,9 @@ impl Render for TitleBar {
                 }),
             )
             .child(ServerControl {})
-            .child(self.window_controls.clone())
+            .when(show_custom_window_control, |this|{
+                this.child(self.window_controls.clone())
+            })
+            
     }
 }
