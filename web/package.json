@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack && rm -rf ../assets/web/ && cp -r ./out/. ../assets/web/",
+    "release":"npm run build && cd .. && cargo build --release",
     "start": "next start",
     "lint": "eslint"
   },
