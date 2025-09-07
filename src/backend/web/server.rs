@@ -26,7 +26,7 @@ struct ShareItem {
 }
 
 #[get("/web/{path:.*}")]
-async fn index(path: web::Path<(String)>) -> impl Responder {
+async fn index(path: web::Path<String>) -> impl Responder {
     let path = path.into_inner();
     info!("Accept request: GET /web/{}", path);
 
