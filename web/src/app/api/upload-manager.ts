@@ -96,6 +96,7 @@ export class UploadManager {
                 console.log(`[UploadManager::setFile]开始计算 ${file.name} 文件的哈希值...`);
                 const hashWorkerManager = new HashWorkerManager();
                 this.fileHash = await hashWorkerManager.calculateHash(file);
+                hashWorkerManager.terminate();
                 console.log(`[UploadManager::setFile]${file.name} 文件的哈希值: ${this.fileHash}`);
             }
 
@@ -204,6 +205,7 @@ export class UploadManager {
                 console.log(`[UploadManager::startOrResumeUpload::uploadNextChunk]开始计算分片${chunkNumber}的哈希`);
                 const hashWorkerManager = new HashWorkerManager();
                 chunk.chunkHash = await hashWorkerManager.calculateHash(blob);
+                hashWorkerManager.terminate();
                 console.log(`[UploadManager::startOrResumeUpload::uploadNextChunk]分片${chunkNumber}的哈希值是：${chunk.chunkHash}`);
             }
 
