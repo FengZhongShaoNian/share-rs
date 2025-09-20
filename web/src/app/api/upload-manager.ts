@@ -56,7 +56,7 @@ export interface UploadOptions {
 
 // 默认配置
 const DEFAULT_OPTIONS: UploadOptions = {
-    chunkSize: 5 * 1024 * 1024, // 5MB
+    chunkSize: 100 * 1024 * 1024, // 100MB
     maxConcurrentUploads: 3, onProgress: (status: UploadStatus) => {
         console.log(status)
     }, onError: (error_msg: string) => {
