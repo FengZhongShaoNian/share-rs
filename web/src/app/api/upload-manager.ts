@@ -56,8 +56,9 @@ export interface UploadOptions {
 
 // 默认配置
 const DEFAULT_OPTIONS: UploadOptions = {
-    chunkSize: 100 * 1024 * 1024, // 100MB
-    maxConcurrentUploads: 3, onProgress: (status: UploadStatus) => {
+    chunkSize: 20 * 1024 * 1024, // 20MB
+    maxConcurrentUploads: 5,
+    onProgress: (status: UploadStatus) => {
         console.log(status)
     }, onError: (error_msg: string) => {
         console.error(error_msg);
@@ -177,6 +178,7 @@ export class UploadManager {
         console.log('[UploadManager::startOrResumeUpload]【%s】文件待上传的分片：', this.file.name, chunksToUpload);
 
         if (this.pendingChunks.length === 0) {
+            console.log('[UploadManager::startOrResumeUpload]pendingChunks.length === 0，开始创建切片...');
             const chunks: Chunk[] = [];
             for (const chunkNumber of chunksToUpload) {
                 const chunk: Chunk = this.slice(chunkNumber);
