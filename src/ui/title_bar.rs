@@ -9,10 +9,7 @@ use crate::ui::file_list_page::FileListPage;
 use crate::ui::root_view::Pages;
 use crate::ui::settings_page::SettingsPage;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, Global, ImageSource, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, ReadGlobal, Render, RenderOnce,
-    Resource, StatefulInteractiveElement, Styled, UpdateGlobal, WeakEntity, Window,
-    WindowAppearance, WindowControlArea, img, transparent_black,
+    img, px, transparent_black, App, AppContext, AsyncApp, Context, Entity, Global, ImageSource, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, ReadGlobal, Render, RenderOnce, Resource, StatefulInteractiveElement, Styled, UpdateGlobal, WeakEntity, Window, WindowAppearance, WindowControlArea
 };
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::switch::Switch;
@@ -106,8 +103,8 @@ impl Render for WindowControl {
             .justify_center()
             .content_center()
             .cursor_pointer()
-            .w_5()
-            .h_5()
+            .w(px(16.))
+            .h(px(16.))
             .child(icon)
             .on_hover(cx.listener(|this, hover, _, cx| {
                 cx.stop_propagation();
