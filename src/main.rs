@@ -141,6 +141,11 @@ fn main() {
         )
         .unwrap();
 
+        // 应用启动时自动启动服务器
+        let datasource = DatabaseSource::global(cx).instance.clone();
+        let share_server = cx.global_mut::<ShareServer>();
+        share_server.start(setting::Settings::clone(), datasource);
+
         handle_open_args(args().collect(), cx);
         cx.spawn(async move |cx| {
             while let Some(open_request) = open_request_receiver.next().await {
