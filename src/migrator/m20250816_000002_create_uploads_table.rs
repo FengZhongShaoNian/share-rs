@@ -31,6 +31,7 @@ impl MigrationTrait for Migration {
                             .unique_key()
                             .not_null(),
                     )
+                    .col(ColumnDef::new(Uploads::FileHash).string().null())
                     .col(ColumnDef::new(Uploads::Status).string().not_null())
                     .col(ColumnDef::new(Uploads::CreatedAt).date_time().not_null())
                     .to_owned(),
@@ -53,6 +54,7 @@ pub enum Uploads {
     FileName,
     FileSize,
     FilePath,
+    FileHash,
     Status,
     CreatedAt,
 }

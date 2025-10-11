@@ -8,8 +8,19 @@ use sea_orm::{ColumnTrait, EntityTrait};
 pub use uploads::ActiveModel as UploadItemActiveModel;
 pub use uploads::Model as UploadItem;
 
+/// 根据file_hash获取对应的上传项
+pub async fn get_upload_item_by_file_hash(
+    connection: &DatabaseConnection,
+    file_hash: &str,
+) -> anyhow::Result<Option<UploadItem>> {
+    let result = Uploads::find()
+        .filter(uploads::Column::FileHash.eq(file_hash))
+        .one(connection).await?;
+    Ok(result)
+}
+
 /// 根据upload_id获取对应的上传项
-pub async fn get_upload_item(
+pub async fn get_upload_item_by_id(
     connection: &DatabaseConnection,
     upload_id: &str,
 ) -> anyhow::Result<Option<UploadItem>> {

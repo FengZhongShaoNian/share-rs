@@ -1,7 +1,4 @@
-use crate::backend::db::repository::{
-    Chunk, UploadItem, delete_chunk_by_id, delete_upload_item, get_chunk_by_number,
-    get_upload_chunks, get_upload_item, insert_chunk, insert_upload_item, update_upload_item,
-};
+use crate::backend::db::repository::{Chunk, UploadItem, delete_chunk_by_id, delete_upload_item, get_chunk_by_number, get_upload_chunks, get_upload_item_by_id, insert_chunk, insert_upload_item, update_upload_item, get_upload_item_by_file_hash};
 use crate::setting::Settings;
 use crate::util;
 use crate::util::{
@@ -9,7 +6,7 @@ use crate::util::{
 };
 use actix_multipart::form::{MultipartForm, json::Json, tempfile::TempFile};
 use actix_web::{HttpResponse, Responder, post, web};
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, Error};
 use chrono::Local;
 use futures::AsyncWriteExt;
 use futures_util::AsyncReadExt;
@@ -20,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use sea_query::Iden;
+use snowflaked::sync::Generator;
 
 // 常量定义
 const CHUNK_FILE_PREFIX: &str = "chunk_";
@@ -34,15 +33,17 @@ enum UploadStatus {
 /// 初始化上传请求结构
 #[derive(Deserialize)]
 pub struct InitUploadRequest {
+    upload_id: Option<String>,
     file_name: String,
     file_size: i64,
-    file_hash: String,
+    // 由于移动端设备计算哈希太慢了，允许不计算哈希
+    file_hash: Option<String>,
 }
 
 /// 初始化上传响应结构
 #[derive(Serialize)]
 pub struct InitUploadResponse {
-    file_id: String,
+    upload_id: String,
     status: UploadStatus,
     uploaded_chunks: Vec<i32>,
     uploaded_size: i64,
@@ -55,12 +56,26 @@ pub async fn init_upload(
     settings: web::Data<Arc<Settings>>,
     info: web::Json<InitUploadRequest>,
 ) -> impl Responder {
+    let upload_id = info.upload_id.clone();
     let file_hash = info.file_hash.clone();
     let storage_folder = &settings.get_ref().storage_folder;
     let connection_ref = connection.get_ref();
 
-    // 查找文件元数据
-    match get_upload_item(connection_ref, &file_hash).await {
+    let mut upload_item = Ok(None);
+    if let Some(upload_id) = upload_id {
+        upload_item = get_upload_item_by_id(connection_ref, &upload_id).await;
+    }
+
+    if let Err(e) = upload_item {
+        error!("Failed to query uploads: {}", e);
+        return HttpResponse::InternalServerError().body("Failed to query uploads by id");
+    }
+
+    if let Ok(None) = upload_item && let Some(file_hash) = file_hash {
+        upload_item = get_upload_item_by_file_hash(connection_ref, &file_hash).await;
+    }
+
+    match upload_item {
         Ok(Some(upload_item)) => {
             let status = match UploadStatus::from_str(&upload_item.status) {
                 Ok(status) => status,
@@ -84,7 +99,7 @@ pub async fn init_upload(
             // 没有找到现有记录，创建新的上传项
             match create_upload_item(connection_ref, storage_folder, &info).await {
                 Ok(upload_item) => HttpResponse::Ok().json(InitUploadResponse {
-                    file_id: upload_item.id,
+                    upload_id: upload_item.id,
                     status: UploadStatus::Uploading,
                     uploaded_chunks: vec![],
                     uploaded_size: 0,
@@ -112,12 +127,21 @@ async fn create_upload_item<P: AsRef<Path>>(
         .await
         .context("Failed to get available filename")?;
 
+    let generator = Generator::new(0);
+    let snowflake_id: i64 = generator.generate();
+    let upload_id =  if let Some(ref id) = info.upload_id {
+        id.clone()
+    } else {
+        format!("{:X}", snowflake_id)
+    };
+
     // 创建新的上传记录
     let upload_item = UploadItem {
-        id: info.file_hash.clone(),
+        id: upload_id,
         file_name: info.file_name.clone(),
         file_size: info.file_size,
         file_path: file_path.to_string_lossy().into_owned(),
+        file_hash: info.file_hash.clone(),
         status: UploadStatus::Uploading.to_string(),
         created_at: Local::now().naive_local(),
     };
@@ -164,9 +188,19 @@ async fn handle_completed_upload(
     storage_folder: &str,
     info: &InitUploadRequest,
 ) -> HttpResponse {
-    match check_file(upload_item.file_path, &upload_item.id).await {
+    let mut check_result = Ok(util::CheckFileResult::Valid);
+    if let Some(file_hash) = upload_item.file_hash {
+        check_result = check_file(upload_item.file_path, &file_hash).await;
+    } else {
+        check_result = match exists_file(upload_item.file_path).await {
+            Ok(true) => Ok(util::CheckFileResult::Valid),
+            Ok(false) => Ok(util::CheckFileResult::Invalid("File not found".to_string())),
+            Err(e) => Err(Error::from(e)),
+        }
+    }
+    match check_result {
         Ok(util::CheckFileResult::Valid) => HttpResponse::Ok().json(InitUploadResponse {
-            file_id: upload_item.id,
+            upload_id: upload_item.id,
             status: UploadStatus::Completed,
             uploaded_chunks: vec![],
             uploaded_size: upload_item.file_size,
@@ -184,7 +218,7 @@ async fn handle_completed_upload(
             }
             match create_upload_item(connection, Path::new(storage_folder), info).await {
                 Ok(new_upload_item) => HttpResponse::Ok().json(InitUploadResponse {
-                    file_id: new_upload_item.id,
+                    upload_id: new_upload_item.id,
                     status: UploadStatus::Uploading,
                     uploaded_chunks: vec![],
                     uploaded_size: 0,
@@ -218,7 +252,7 @@ async fn handle_uploading_upload(
                     valid_chunks.iter().map(|c| c.chunk_number).collect();
                 let uploaded_size = valid_chunks.iter().map(|c| c.chunk_size).sum::<i64>();
                 HttpResponse::Ok().json(InitUploadResponse {
-                    file_id: upload_id,
+                    upload_id,
                     status: UploadStatus::Uploading,
                     uploaded_chunks,
                     uploaded_size,
@@ -239,7 +273,7 @@ async fn handle_uploading_upload(
 /// 上传元数据结构
 #[derive(Debug, Deserialize)]
 struct Metadata {
-    file_id: String,
+    upload_id: String,
     chunk_number: i32, // 切片序号，从1开始
     chunk_hash: String,
 }
@@ -260,7 +294,7 @@ pub async fn upload_chunk(
     MultipartForm(form): MultipartForm<UploadForm>,
 ) -> impl Responder {
     let metadata = form.json.0;
-    let upload_id = metadata.file_id;
+    let upload_id = metadata.upload_id;
     let chunk_number = metadata.chunk_number;
     let chunk_hash = metadata.chunk_hash;
     let chunk_file = form.file;
@@ -273,7 +307,7 @@ pub async fn upload_chunk(
     }
 
     // 检查上传项目是否存在
-    let upload_item = match get_upload_item(connection, &upload_id).await {
+    let upload_item = match get_upload_item_by_id(connection, &upload_id).await {
         Ok(Some(item)) => item,
         Ok(None) => {
             return HttpResponse::NotFound().body("Upload item not found");
@@ -397,7 +431,7 @@ pub async fn complete_upload(
     let connection_ref = connection.get_ref();
 
     // 获取文件元数据
-    let mut upload_item = match get_upload_item(connection_ref, &upload_id).await {
+    let mut upload_item = match get_upload_item_by_id(connection_ref, &upload_id).await {
         Ok(Some(meta)) => meta,
         Ok(None) => return HttpResponse::NotFound().body("File not found"),
         Err(e) => {
@@ -504,7 +538,12 @@ async fn merge_chunks<P: AsRef<Path>>(
     }
 
     // 计算SHA256并验证文件哈希
-    check_file_hash(&output_path, &upload_item.id).await?;
+    if let Some(ref hash) = upload_item.file_hash {
+        let check_ok = check_file_hash(&output_path, hash).await?;
+        if !check_ok {
+            return Err(anyhow!("Hash mismatch"));
+        }
+    }
 
     Ok(output_path.to_path_buf())
 }

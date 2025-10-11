@@ -1,5 +1,6 @@
 // UploadManager.ts
 import {HashWorkerManager} from './hash-worker-manager';
+import {CpuPerformanceLevel, performanceInfo} from "@/app/api/cpu-performance";
 
 interface Chunk {
     status: 'waiting' | 'uploading' | 'completed';
@@ -28,9 +29,18 @@ export interface UploadStatus {
     error?: string;
 }
 
+function storeFileId(file: File, fileId: string){
+    const key = file.name + '-' + file.size + '-' + file.lastModified;
+    localStorage.setItem(key, fileId);
+}
+function tryGetFileId(file: File): string | null{
+    const key = file.name + '-' + file.size + '-' + file.lastModified;
+   return localStorage.getItem(key);
+}
+
 export function newUploadStatus(file: File): UploadStatus{
     return {
-        fileId: '', // 这是后端的upload_id，initialized之后才会有
+        fileId: tryGetFileId(file) || '', // 这是后端的upload_id，除非此前尝试上传过，否则initialized之后才会有
         status: UploadState.New,
         progress: 0,
         uploadedChunks: [],
@@ -40,7 +50,7 @@ export function newUploadStatus(file: File): UploadStatus{
 }
 
 export interface InitUploadResponse {
-    file_id: string;
+    upload_id: string;
     status: 'Uploading' | 'Completed';
     uploaded_chunks: number[];
     uploaded_size: number;
@@ -67,6 +77,17 @@ const DEFAULT_OPTIONS: UploadOptions = {
     }
 };
 
+// 决定是否计算哈希
+function shouldCalculateHash() {
+   if(performanceInfo.level === CpuPerformanceLevel.High){
+       console.log('电脑性能还可以，决定计算哈希');
+       return true;
+   }else {
+       console.log('电脑性能不太行，决定不计算哈希');
+       return false;
+   }
+}
+
 // 上传管理器类（用于对单个文件进行分片上传）
 export class UploadManager {
     private options: UploadOptions;
@@ -92,7 +113,7 @@ export class UploadManager {
         }
 
         try {
-            if(this.fileHash === null){
+            if(this.fileHash === null && shouldCalculateHash()){
                 // 使用Web Worker计算文件哈希
                 console.log(`[UploadManager::setFile]开始计算 ${file.name} 文件的哈希值...`);
                 const hashWorkerManager = new HashWorkerManager();
@@ -110,6 +131,9 @@ export class UploadManager {
             // 初始化上传
             const initResponse = await this.initUpload(file, this.fileHash);
 
+            // 存储fileId
+            storeFileId(file, initResponse.upload_id);
+
             // 如果在计算哈希的过程中用户暂停了上传，那么退出上传
             if(this.isPaused) {
                 console.log(`[UploadManager::setFile]用户已暂停上传[${file.name}]，退出...`);
@@ -117,7 +141,7 @@ export class UploadManager {
             }
 
             this.updateStatus({
-                fileId: initResponse.file_id,
+                fileId: initResponse.upload_id,
                 status: initResponse.status === 'Completed' ? UploadState.Completed : UploadState.Initialized,
                 progress: initResponse.uploaded_size / file.size * 100,
                 uploadedChunks: initResponse.uploaded_chunks,
@@ -282,12 +306,13 @@ export class UploadManager {
     }
 
     // 初始化上传
-    private async initUpload(file: File, fileHash: string): Promise<InitUploadResponse> {
+    private async initUpload(file: File, fileHash: string | null): Promise<InitUploadResponse> {
+        const fileId = tryGetFileId(file);
         const response = await fetch(`/upload/init`, {
             method: 'POST', headers: {
                 'Content-Type': 'application/json',
             }, body: JSON.stringify({
-                file_name: file.name, file_size: file.size, file_hash: fileHash,
+                upload_id: fileId, file_name: file.name, file_size: file.size, file_hash: fileHash,
             }),
         });
 
@@ -302,7 +327,7 @@ export class UploadManager {
     // 上传单个分片
     private async doUploadChunk(fileId: string, chunkNumber: number, chunk: Blob, chunkHash: string): Promise<void> {
         const jsonData = {
-            file_id: fileId, chunk_number: chunkNumber, chunk_hash: chunkHash,
+            upload_id: fileId, chunk_number: chunkNumber, chunk_hash: chunkHash,
         };
 
         const jsonBlob = new Blob([JSON.stringify(jsonData)], {type: 'application/json'});
