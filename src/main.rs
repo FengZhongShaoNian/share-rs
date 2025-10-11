@@ -110,6 +110,7 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
         cx.open_window(
             WindowOptions {
+                app_id: Some("share-rs.app.nullable.site".to_string()),
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_background: WindowBackgroundAppearance::Opaque,
                 window_decorations: Some(WindowDecorations::Client),

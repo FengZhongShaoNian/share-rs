@@ -8,3 +8,4 @@ Comment=Share files
 Categories=Network
 Terminal=false
 StartupNotify=true
+StartupWMClass=share-rs.app.nullable.site
