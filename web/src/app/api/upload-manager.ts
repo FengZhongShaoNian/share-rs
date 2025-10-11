@@ -20,7 +20,7 @@ export enum UploadState {
 }
 
 export interface UploadStatus {
-    fileId: string;
+    uploadId: string;
     status: UploadState;
     progress: number;
     uploadedChunks: number[];
@@ -29,18 +29,18 @@ export interface UploadStatus {
     error?: string;
 }
 
-function storeFileId(file: File, fileId: string){
+function storeUploadId(file: File, uploadId: string){
     const key = file.name + '-' + file.size + '-' + file.lastModified;
-    localStorage.setItem(key, fileId);
+    localStorage.setItem(key, uploadId);
 }
-function tryGetFileId(file: File): string | null{
+function tryGetUploadId(file: File): string | null{
     const key = file.name + '-' + file.size + '-' + file.lastModified;
    return localStorage.getItem(key);
 }
 
 export function newUploadStatus(file: File): UploadStatus{
     return {
-        fileId: tryGetFileId(file) || '', // 这是后端的upload_id，除非此前尝试上传过，否则initialized之后才会有
+        uploadId: tryGetUploadId(file) || '', // 这是后端的upload_id，除非此前尝试上传过，否则initialized之后才会有
         status: UploadState.New,
         progress: 0,
         uploadedChunks: [],
@@ -132,7 +132,7 @@ export class UploadManager {
             const initResponse = await this.initUpload(file, this.fileHash);
 
             // 存储fileId
-            storeFileId(file, initResponse.upload_id);
+            storeUploadId(file, initResponse.upload_id);
 
             // 如果在计算哈希的过程中用户暂停了上传，那么退出上传
             if(this.isPaused) {
@@ -141,7 +141,7 @@ export class UploadManager {
             }
 
             this.updateStatus({
-                fileId: initResponse.upload_id,
+                uploadId: initResponse.upload_id,
                 status: initResponse.status === 'Completed' ? UploadState.Completed : UploadState.Initialized,
                 progress: initResponse.uploaded_size / file.size * 100,
                 uploadedChunks: initResponse.uploaded_chunks,
@@ -188,7 +188,7 @@ export class UploadManager {
         this.isPaused = false;
         this.updateStatus({...this.status, status: UploadState.Uploading});
 
-        const fileId = this.status.fileId;
+        const uploadId = this.status.uploadId;
         const totalChunks = Math.ceil(this.file.size / this.options.chunkSize);
 
         // 确定需要上传的分片
@@ -241,7 +241,7 @@ export class UploadManager {
                 return;
             }
 
-            await this.doUploadChunk(fileId, chunkNumber, blob, chunk.chunkHash);
+            await this.doUploadChunk(uploadId, chunkNumber, blob, chunk.chunkHash);
 
             const index = this.pendingChunks.indexOf(chunk);
             this.pendingChunks.splice(index, 1);
@@ -261,7 +261,7 @@ export class UploadManager {
             await Promise.all(uploadPromises);
 
             console.log('[UploadManager::startOrResumeUpload]所有分片已经上传完成，开始发送合并请求');
-            await this.completeUpload(fileId);
+            await this.completeUpload(uploadId);
 
         } catch (error) {
             this.handleError(error);
@@ -307,12 +307,12 @@ export class UploadManager {
 
     // 初始化上传
     private async initUpload(file: File, fileHash: string | null): Promise<InitUploadResponse> {
-        const fileId = tryGetFileId(file);
+        const uploadId = tryGetUploadId(file);
         const response = await fetch(`/upload/init`, {
             method: 'POST', headers: {
                 'Content-Type': 'application/json',
             }, body: JSON.stringify({
-                upload_id: fileId, file_name: file.name, file_size: file.size, file_hash: fileHash,
+                upload_id: uploadId, file_name: file.name, file_size: file.size, file_hash: fileHash,
             }),
         });
 
@@ -325,9 +325,9 @@ export class UploadManager {
     }
 
     // 上传单个分片
-    private async doUploadChunk(fileId: string, chunkNumber: number, chunk: Blob, chunkHash: string): Promise<void> {
+    private async doUploadChunk(uploadId: string, chunkNumber: number, chunk: Blob, chunkHash: string): Promise<void> {
         const jsonData = {
-            upload_id: fileId, chunk_number: chunkNumber, chunk_hash: chunkHash,
+            upload_id: uploadId, chunk_number: chunkNumber, chunk_hash: chunkHash,
         };
 
         const jsonBlob = new Blob([JSON.stringify(jsonData)], {type: 'application/json'});
