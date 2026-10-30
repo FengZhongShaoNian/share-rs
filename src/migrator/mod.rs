@@ -2,7 +2,6 @@ mod m20250816_000002_create_chunks_table;
 mod m20250816_000002_create_shares_table;
 mod m20250816_000002_create_uploads_table;
 
-use sea_orm::Database;
 use sea_orm_migration::prelude::*;
 
 pub struct Migrator;
@@ -24,6 +23,8 @@ fn test_create_sqlite_database_file() {
         .enable_all()
         .build()
         .unwrap();
+
+    use sea_orm::Database;
 
     let project_dir = env!("CARGO_MANIFEST_DIR");
     rt.block_on(async {

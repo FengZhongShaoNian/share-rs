@@ -6,35 +6,89 @@ tooltip.server-switch-off:
   en: The server is down, click the switch to start it
   zh-CN: 服务器未启动，点击开关可启动它
 tooltip.add-file-button:
-  en: Click to add files
-  zh-CN: 点击添加文件
+  en: Add files
+  zh-CN: 添加文件
 tooltip.server-info-button:
-  en: Click to view server information
-  zh-CN: 点击查看服务器信息
+  en: Server information
+  zh-CN: 服务器信息
 tooltip.setting-button:
-  en: Click to open settings
-  zh-CN: 点击打开设置
+  en: Settings
+  zh-CN: 设置
 tooltip.remove-file-from-share-list:
   en: Remove file from share list
   zh-CN: 从分享列表中移除文件
 tooltip.open-file-in-file-manager:
-  en: Open file in system file manager
-  zh-CN: 在系统的文件管理器中打开此文件
+  en: Show in file manager
+  zh-CN: 在文件管理器中显示
 label.settings:
   en: Settings
   zh-CN: 设置
 label.server-port:
-  en: "Server port:"
-  zh-CN: "端口号:"
+  en: Server port
+  zh-CN: 端口号
 label.upload-folder:
-  en: "Upload Folder:"
-  zh-CN: "上传文件夹:"
+  en: Upload folder
+  zh-CN: 上传文件夹
+label.upload-folder-placeholder:
+  en: Choose where uploaded files are saved
+  zh-CN: 选择上传文件的保存位置
+label.browse:
+  en: Browse
+  zh-CN: 浏览
+label.choose-files:
+  en: Select files to share
+  zh-CN: 选择要分享的文件
+label.choose-upload-folder:
+  en: Select upload folder
+  zh-CN: 选择上传文件夹
 label.cancel:
-  en: "Cancel"
-  zh-CN: "取消"
+  en: Cancel
+  zh-CN: 取消
 label.save:
-  en: "Save"
-  zh-CN: "保存"
+  en: Save
+  zh-CN: 保存
+label.close:
+  en: Close
+  zh-CN: 关闭
 label.server-info:
-  en: "Server Info"
-  zh-CN: "服务器信息"
+  en: Server information
+  zh-CN: 服务器信息
+label.copy-url:
+  en: Copy address
+  zh-CN: 复制地址
+label.qr-code-unavailable:
+  en: The QR code could not be generated.
+  zh-CN: 无法生成二维码。
+label.server-running:
+  en: Sharing
+  zh-CN: 正在分享
+label.server-stopped:
+  en: Stopped
+  zh-CN: 已停止
+label.empty-share-list:
+  en: Nothing shared yet
+  zh-CN: 还没有分享文件
+label.empty-share-list-hint:
+  en: Add files to make them available on your local network.
+  zh-CN: 添加文件后，局域网内的设备即可访问。
+notification.invalid-port:
+  en: Please enter a port between 1 and 65535.
+  zh-CN: 请输入 1 到 65535 之间的端口号。
+notification.empty-storage-folder:
+  en: Please choose an upload folder.
+  zh-CN: 请选择上传文件夹。
+notification.settings-saved:
+  en: Settings saved.
+  zh-CN: 设置已保存。
+notification.settings-save-failed:
+  en: Failed to save settings. See the log for details.
+  zh-CN: 保存设置失败，详情请查看日志。
+notification.server-started:
+  en: Sharing started.
+  zh-CN: 已开始分享。
+notification.server-stopped:
+  en: Sharing stopped.
+  zh-CN: 已停止分享。
+notification.url-copied:
+  en: Address copied to the clipboard.
+  zh-CN: 地址已复制到剪贴板。

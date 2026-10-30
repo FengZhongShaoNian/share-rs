@@ -1,77 +1,67 @@
-pub mod repository;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use crate::migrator::Migrator;
-use gpui::{Global, SharedString};
 use log::info;
 use sea_orm::{Database, DatabaseConnection};
 use sea_orm_migration::{MigratorTrait, SchemaManager};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use tokio::sync::OnceCell;
 
+use crate::migrator::Migrator;
+
+/// Lazily-opened SQLite database.
+///
+/// The first connection runs the migrations; later connections reuse the
+/// completed initialization. A failed initialization leaves the cell empty, so
+/// the next attempt can retry instead of permanently marking the database as
+/// ready.
 pub struct SqliteDatabaseSource {
-    db_file: SharedString,
-    initialized: Mutex<bool>,
+    db_file: String,
+    initialized: OnceCell<()>,
 }
 
 impl SqliteDatabaseSource {
-    pub fn new(db_file_path: &str) -> Arc<Self> {
-        let db_source = Self {
-            db_file: SharedString::new(db_file_path),
-            initialized: Mutex::new(false),
-        };
-        Arc::new(db_source)
+    pub fn new(db_file_path: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            db_file: db_file_path.into(),
+            initialized: OnceCell::new(),
+        })
     }
 
     pub async fn connection(self: Arc<Self>) -> anyhow::Result<DatabaseConnection> {
-        let mut needs_init = false;
-        {
-            let mut initialized = self
-                .initialized
-                .lock()
-                .expect("Failed to get db initialize lock");
-            if !*initialized {
-                needs_init = true;
-                *initialized = true;
-            }
-        }
-        if needs_init {
-            let db_file = self.db_file.to_string();
-            create_sqlite_db(&db_file).await?;
-        }
+        self.initialized
+            .get_or_try_init(|| create_sqlite_db(self.db_file.to_string()))
+            .await?;
 
-        let connection = Database::connect(format!("sqlite:{}?mode=rw", self.db_file)).await?;
-        Ok(connection)
+        Database::connect(format!("sqlite:{}?mode=rw", self.db_file))
+            .await
+            .map_err(Into::into)
     }
 }
 
+/// GPUI global that gives views access to the application database.
 pub struct DatabaseSource {
     pub instance: Arc<SqliteDatabaseSource>,
 }
 
 impl DatabaseSource {
-    pub fn new(db_file_path: &str) -> Self {
-        let sqlite = SqliteDatabaseSource::new(db_file_path);
-        Self { instance: sqlite }
+    pub fn new(db_file_path: impl Into<String>) -> Self {
+        Self {
+            instance: SqliteDatabaseSource::new(db_file_path),
+        }
     }
 }
 
-impl Global for DatabaseSource {}
+/// Create the SQLite file and apply all migrations.
+async fn create_sqlite_db(db_file_path: String) -> anyhow::Result<()> {
+    info!("Initializing SQLite database at {db_file_path}");
 
-/// Create a sqlite database file under the specified path
-async fn create_sqlite_db(db_file_path: &str) -> anyhow::Result<()> {
-    info!(
-        "Enter create_sqlite_db method, db_file_path:{}",
-        db_file_path
-    );
-
-    let path = PathBuf::from(db_file_path);
+    let path = PathBuf::from(&db_file_path);
     if let Some(parent_dir) = path.parent() {
         async_fs::create_dir_all(parent_dir).await?;
     }
-    let db = Database::connect(format!("sqlite:{}?mode=rwc", db_file_path)).await?;
 
+    let db = Database::connect(format!("sqlite:{db_file_path}?mode=rwc")).await?;
     let _schema_manager = SchemaManager::new(&db);
     Migrator::up(&db, None).await?;
-
     Ok(())
 }

@@ -1,7 +1,7 @@
 # share-rs
 
 This is a LAN file transfer (sharing) tool that supports file sharding upload and breakpoint resumption.
-The backend is developed using rust + GPUI + Actix-web + Sea-ORM, and the frontend is developed with React.
+The desktop UI is built with Rust and [GPUI Kit](https://gpui-kit.com), the HTTP backend uses Actix-web + Sea-ORM, and the web frontend is developed with React.
 
 Main interface：
 ![](screenshot/app-ui.png)

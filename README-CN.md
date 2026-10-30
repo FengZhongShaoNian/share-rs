@@ -1,7 +1,7 @@
 # share-rs
 
 这是一个局域网文件传输（分享）工具，支持文件分片上传和断点续传。
-后端使用rust + GPUI + Actix-web + Sea-ORM 开发，前端使用React开发。
+桌面端使用 Rust + [GPUI Kit](https://gpui-kit.com) 开发，HTTP 后端使用 Actix-web + Sea-ORM，网页端使用 React 开发。
 
 主界面：
 ![](screenshot/app-ui.png)

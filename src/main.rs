@@ -1,157 +1,126 @@
 use std::env::args;
+use std::path::PathBuf;
 use std::process;
+
+use futures::StreamExt;
+use gpui_kit::component::TitleBar;
+use gpui_kit::{
+    App, AsyncApp, Bounds, Global, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
+    WindowOptions, px, size,
+};
+use log::{error, info};
+use sea_orm::DatabaseConnection;
+
+use crate::assets::Assets;
+use crate::backend::db::DatabaseSource;
+use crate::backend::repository::shares;
+use crate::backend::web::server::ShareServer;
+use crate::gpui_tokio::Tokio;
+use crate::settings::{Settings, configuration_dir};
+use crate::single_instance::NextStep::{Abort, Continue};
+use crate::single_instance::{OpenRequest, check_single_instance};
+use crate::ui::app::AppRoot;
+use crate::ui::file_list::FileListPage;
 
 mod assets;
 mod backend;
 mod gpui_tokio;
 mod migrator;
 mod mimes;
-mod setting;
+mod settings;
 mod single_instance;
 mod ui;
 mod util;
 
-use crate::assets::Assets;
-use crate::backend::db::DatabaseSource;
-use crate::backend::entities::shares;
-use crate::backend::web::server::ShareServer;
-use crate::gpui_tokio::Tokio;
-use crate::mimes::detect_mime_type;
-use crate::setting::configuration_dir;
-use crate::single_instance::NextStep::{Abort, Continue};
-use crate::single_instance::{OpenRequest, check_single_instance};
-use crate::ui::file_list_page::FileListPage;
-use crate::ui::root_view::{Pages, WindowRootView};
-use crate::ui::server_info_page::ServerInfoPage;
-use crate::ui::settings_page::SettingsPage;
-use crate::ui::title_bar::TitleBar;
-use futures::StreamExt;
-use gpui::{
-    App, Application, AsyncApp, Bounds, ReadGlobal, WindowBackgroundAppearance, WindowBounds,
-    WindowDecorations, WindowOptions, prelude::*, px, size,
-};
-use gpui_component::{Theme, ThemeMode};
-use log::{error, info};
-use sea_orm::{ActiveModelTrait, IntoActiveModel};
-use snowflaked::sync::Generator;
-
 rust_i18n::i18n!("locales", fallback = "en");
 
-fn handle_open_args(args: Vec<String>, cx: &mut App) {
-    if args.len() > 1 {
-        let db = DatabaseSource::global(cx);
-        let sqlite = db.instance.clone();
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            Tokio::spawn(cx, async move {
-                // args[1] is program name
-                for file in args.iter().skip(1) {
-                    match async_fs::canonicalize(&file).await {
-                        Ok(path) => {
-                            let connection = sqlite.clone().connection().await.unwrap();
+// Backend services are stored in GPUI globals so views can reach them without
+// threading handles through every constructor.
+impl Global for DatabaseSource {}
+impl Global for ShareServer {}
 
-                            let generator = Generator::new(0);
-
-                            let file_path = path.to_str().unwrap().to_string();
-                            let model: shares::ActiveModel = shares::Model {
-                                id: generator.generate(),
-                                file_name: path.file_name().unwrap().to_str().unwrap().to_string(),
-                                mime_type: detect_mime_type(&file_path),
-                                file_path,
-                            }
-                            .into_active_model();
-                            model.insert(&connection).await.unwrap();
-                        }
-                        Err(_) => {
-                            error!("Failed to canonicalize path: {}", file);
-                        }
-                    };
-                }
-            })
-            .unwrap()
-            .await
-            .unwrap();
-
-            cx.update(|cx: &mut App| {
-                FileListPage::reload(cx);
-            })
-        })
-        .detach();
+/// Add files passed on the command line (or forwarded by another instance) to
+/// the share list, then refresh the desktop view.
+fn add_files_to_share(paths: impl IntoIterator<Item = String>, cx: &mut App) {
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    if paths.is_empty() {
+        return;
     }
+
+    let database = cx.global::<DatabaseSource>().instance.clone();
+
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let result = Tokio::spawn(cx, async move {
+            let connection: DatabaseConnection = database.connection().await?;
+            let added = shares::add_many(&connection, paths).await;
+            Ok::<_, anyhow::Error>(added)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(added)) => info!("Added {} file(s) to the share list", added.len()),
+            Ok(Err(error)) => error!("Failed to add files to the share list: {error:#}"),
+            Err(error) => error!("File import task failed: {error}"),
+        }
+
+        cx.update(FileListPage::reload);
+    })
+    .detach();
+}
+
+fn handle_open_args(args: Vec<String>, cx: &mut App) {
+    // The first argument is the executable path.
+    add_files_to_share(args.into_iter().skip(1), cx);
 }
 
 fn main() {
     env_logger::init();
 
     let mut open_request_receiver = match check_single_instance() {
-        Ok(next_step) => match next_step {
-            Continue(rx) => rx,
-
-            Abort => {
-                info!("share-rs is already running");
-                process::exit(0);
-            }
-        },
-        Err(e) => {
-            panic!("Failed to check_single_instance, {e}");
+        Ok(Continue(receiver)) => receiver,
+        Ok(Abort) => {
+            info!("share-rs is already running");
+            process::exit(0);
         }
+        Err(error) => panic!("Failed to check single instance: {error}"),
     };
 
     let db_file = configuration_dir().join("data.db");
-    let db_source = DatabaseSource::new(db_file.to_str().unwrap());
+    let database = DatabaseSource::new(db_file.to_string_lossy().into_owned());
 
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
-        gpui_component::init(cx);
-        gpui_tokio::init(cx);
-        cx.set_global(ShareServer::new(Tokio::handle(cx)));
+    gpui_kit::application()
+        .with_assets(Assets)
+        .run(move |cx: &mut App| {
+            gpui_kit::init(cx);
+            gpui_tokio::init(cx);
 
-        setting::Settings::init();
-        cx.set_global::<DatabaseSource>(db_source);
+            cx.set_global(ShareServer::new(Tokio::handle(cx)));
+            cx.set_global(database);
 
-        let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
-        cx.open_window(
-            WindowOptions {
+            let bounds = Bounds::centered(None, size(px(900.0), px(620.0)), cx);
+            let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_background: WindowBackgroundAppearance::Opaque,
+                window_min_size: Some(size(px(640.0), px(420.0))),
                 window_decorations: Some(WindowDecorations::Client),
-                ..Default::default()
-            },
-            |window, cx| {
-                cx.new(|cx| {
-                    cx.observe_window_appearance(window, |_, window, cx| {
-                        Theme::change(ThemeMode::from(window.appearance()), None, cx);
-                        window.refresh();
-                    })
-                    .detach();
+                ..TitleBar::window_options()
+            };
 
-                    let title_bar = TitleBar::new(cx);
-                    let file_list_page = FileListPage::new(cx);
-                    FileListPage::reload(cx);
-                    let settings_page = SettingsPage::new(window, cx);
-                    cx.set_global::<Pages>(Pages::FileListPage);
-                    let server_info_page = ServerInfoPage::new(window, cx);
+            gpui_kit::open_window(options, cx, AppRoot::new)
+                .expect("Failed to open the main window");
 
-                    WindowRootView {
-                        title_bar,
-                        file_list_page,
-                        settings_page,
-                        server_info_page,
-                    }
-                })
-            },
-        )
-        .unwrap();
+            // Load settings once so the first render and the HTTP server use a
+            // stable snapshot.
+            let _ = Settings::get();
 
-        handle_open_args(args().collect(), cx);
-        cx.spawn(async move |cx| {
-            while let Some(open_request) = open_request_receiver.next().await {
-                cx.update(|cx: &mut App| {
-                    let OpenRequest { args } = open_request;
-                    info!("open_request.args: {:?}", &args);
-                    handle_open_args(args, cx);
-                })
-                .ok();
-            }
-        })
-        .detach();
-    });
+            handle_open_args(args().collect(), cx);
+
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                while let Some(OpenRequest { args }) = open_request_receiver.next().await {
+                    info!("Received open request: {args:?}");
+                    cx.update(|cx: &mut App| handle_open_args(args, cx));
+                }
+            })
+            .detach();
+        });
 }

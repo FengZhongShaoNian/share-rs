@@ -335,13 +335,13 @@ pub fn get_icon_for_mime(mime: &str) -> Arc<str> {
 /// Detect mime type for file in file system (Disk Access)
 pub fn detect_mime_type(file_path: &str) -> String {
     infer::get_from_path(file_path)
-        .unwrap()
-        .map(|k| k.mime_type().to_string())
-        .unwrap_or_else(|| {
-            if let Some(mime) = MimeGuess::from_path(file_path).first() {
-                mime.to_string()
-            } else {
-                "unknown".to_string()
-            }
+        .ok()
+        .flatten()
+        .map(|kind| kind.mime_type().to_string())
+        .or_else(|| {
+            MimeGuess::from_path(file_path)
+                .first()
+                .map(|mime| mime.to_string())
         })
+        .unwrap_or_else(|| "unknown".to_string())
 }

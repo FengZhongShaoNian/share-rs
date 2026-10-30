@@ -10,10 +10,10 @@ use std::net::Shutdown;
 use std::thread::spawn;
 
 #[cfg(windows)]
-use uds_windows::{UnixStream, UnixListener};
+use uds_windows::{UnixListener, UnixStream};
 
 #[cfg(unix)]
-use std::os::unix::net::{UnixStream, UnixListener};
+use std::os::unix::net::{UnixListener, UnixStream};
 
 #[derive(Debug)]
 pub enum NextStep {
@@ -30,14 +30,17 @@ pub struct OpenRequest {
 // 如果没有已存在的进程，那么监听指定的socket，当有人
 pub fn check_single_instance() -> anyhow::Result<NextStep> {
     let socket_path = dirs::cache_dir().ok_or(anyhow::anyhow!("no cache dir"))?;
-    let socket_path =  socket_path.join("share-rs.socket");
-    info!("checking single instance, socket path: {}", socket_path.display());
+    let socket_path = socket_path.join("share-rs.socket");
+    info!(
+        "checking single instance, socket path: {}",
+        socket_path.display()
+    );
 
     // remove the socket if the process listening on it has died
-    if let Err(e) = UnixStream::connect(&socket_path) {
-        if e.kind() == std::io::ErrorKind::ConnectionRefused {
-            std::fs::remove_file(&socket_path)?;
-        }
+    if let Err(error) = UnixStream::connect(&socket_path)
+        && error.kind() == std::io::ErrorKind::ConnectionRefused
+    {
+        std::fs::remove_file(&socket_path)?;
     }
 
     match UnixListener::bind(&socket_path) {

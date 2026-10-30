@@ -3,3 +3,5 @@
 /web/.next
 /web/out
 /assets/web
+/.sync.ffs_db
+/.idea

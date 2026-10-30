@@ -1,13 +1,9 @@
-use crate::util::linux::LinuxFileManagers;
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use async_fs::File;
 use futures_util::{AsyncReadExt, io};
-use log::error;
 use sha2::{Digest, Sha256};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::thread::spawn;
 
 pub async fn exists_file<P: AsRef<Path>>(path: P) -> io::Result<bool> {
     match File::open(path).await {
@@ -22,27 +18,11 @@ pub async fn exists_file<P: AsRef<Path>>(path: P) -> io::Result<bool> {
     }
 }
 
-pub async fn exists_folder<P: AsRef<Path>>(path: P) -> io::Result<bool> {
-    if let Err(e) = async_fs::read_dir(path).await {
-        if e.kind() == ErrorKind::NotFound {
-            Ok(false)
-        } else {
-            Err(e)
-        }
-    } else {
-        Ok(true)
-    }
-}
-
 pub async fn delete_file_if_exists<P: AsRef<Path>>(path: P) -> io::Result<()> {
-    if let Err(e) = async_fs::remove_file(path).await {
-        if e.kind() == ErrorKind::NotFound {
-            Ok(())
-        } else {
-            Err(e)
-        }
-    } else {
-        Ok(())
+    match async_fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -58,24 +38,6 @@ fn test_exists_file() {
     rt.block_on(async {
         assert_eq!(false, exists_file(Path::new("/foo/bar")).await.unwrap());
         assert_eq!(true, exists_file(&cargo_file).await.unwrap());
-    });
-}
-#[test]
-fn test_exists_folder() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let project_dir = env!("CARGO_MANIFEST_DIR");
-
-    rt.block_on(async {
-        assert_eq!(false, exists_file(Path::new("/foo/bar")).await.unwrap());
-        assert_eq!(
-            true,
-            exists_file(&PathBuf::new().join(project_dir))
-                .await
-                .unwrap()
-        );
     });
 }
 
@@ -123,149 +85,6 @@ fn test_get_available_filename() {
         let path = get_available_filename(cargo_file).await.unwrap();
         println!("Available filename: {}", path.display());
     });
-}
-
-mod linux {
-    use crate::util::linux::LinuxFileManagers::{
-        Caja, Dolphin, Nautilus, Pcmanfm, Thunar, Unknown,
-    };
-    use std::process::Command;
-
-    #[derive(Debug, Eq, PartialEq)]
-    pub enum LinuxFileManagers {
-        Nautilus,
-        Dolphin,
-        Thunar,
-        Pcmanfm,
-        Caja,
-        Unknown,
-    }
-    pub fn get_default_file_manager() -> anyhow::Result<LinuxFileManagers> {
-        let output = Command::new("xdg-mime")
-            .args(&["query", "default", "inode/directory"])
-            .output()?;
-
-        if output.status.success() {
-            let desktop_file_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if desktop_file_name.contains("Nautilus") {
-                Ok(Nautilus)
-            } else if desktop_file_name.contains("Dolphin") {
-                Ok(Dolphin)
-            } else if desktop_file_name.contains("Thunar") {
-                Ok(Thunar)
-            } else if desktop_file_name.contains("Pcmanfm") {
-                Ok(Pcmanfm)
-            } else if desktop_file_name.contains("Caja") {
-                Ok(Caja)
-            } else {
-                Ok(Unknown)
-            }
-        } else {
-            Ok(Unknown)
-        }
-    }
-}
-
-pub fn open_folder_and_select_file(folder_path: &str, file_name: &str) -> anyhow::Result<()> {
-    let full_path = Path::new(folder_path).join(file_name);
-
-    if cfg!(target_os = "windows") {
-        Command::new("explorer")
-            .args(&["/select,", &full_path.to_string_lossy()])
-            .spawn()?;
-        Ok(())
-    } else if cfg!(target_os = "macos") {
-        Command::new("open")
-            .args(&["-R", &full_path.to_string_lossy()])
-            .spawn()?;
-        Ok(())
-    } else if cfg!(target_os = "linux") {
-        let fm = linux::get_default_file_manager()?;
-        match fm {
-            LinuxFileManagers::Nautilus => {
-                // Try nautilus --select, if it fails, use gio
-                let status = Command::new("nautilus")
-                    .args(&["--select", &full_path.to_string_lossy()])
-                    .status();
-
-                if status.is_err() {
-                    Command::new("gio")
-                        .args(&[
-                            "open",
-                            folder_path,
-                            "--select",
-                            &full_path.to_string_lossy(),
-                        ])
-                        .spawn()?;
-                }
-                Ok(())
-            }
-            LinuxFileManagers::Dolphin => {
-                let full_path = PathBuf::new().join(folder_path).join(file_name);
-                let file = full_path.to_str().unwrap();
-                Command::new("dolphin").args(&["--select", file]).spawn()?;
-                Ok(())
-            }
-            LinuxFileManagers::Thunar => {
-                // Thunar doest not support select file option.
-                // So, we just open the folder
-                Command::new("thunar").arg(folder_path).spawn()?;
-                Ok(())
-            }
-            LinuxFileManagers::Pcmanfm => {
-                // Pcmanfm doest not support select file option.
-                // So, we just open the folder
-                Command::new("pcmanfm").arg(folder_path).spawn()?;
-                Ok(())
-            }
-            LinuxFileManagers::Caja => {
-                let full_path = PathBuf::new().join(folder_path).join(file_name);
-                let file = full_path.to_str().unwrap();
-                Command::new("caja").args(&["--select", &file]).spawn()?;
-                Ok(())
-            }
-            LinuxFileManagers::Unknown => Err(anyhow!(
-                "Failed to open folder and select file, unknown file manager"
-            )),
-        }
-    } else {
-        Err(anyhow!(
-            "Failed to open folder and select file, system not supported"
-        ))
-    }
-}
-
-pub fn open_file_in_file_manager(full_path: &str) {
-    let path = PathBuf::new().join(full_path);
-    let folder_path = path.parent();
-    let file_name = path.file_name();
-    if let Some(folder_path) = folder_path {
-        if let Some(file_name) = file_name {
-            let folder_path = folder_path.to_str().unwrap().to_string();
-            let file_name = file_name.to_str().unwrap().to_string();
-            spawn(move || open_folder_and_select_file(&folder_path, &file_name).unwrap());
-        } else {
-            error!("Failed to get file name of {}", full_path);
-        }
-    } else {
-        error!("Failed to get folder path of {}", full_path);
-    }
-}
-
-#[test]
-fn test_get_default_file_manager_on_linux() {
-    if let Ok(fm) = linux::get_default_file_manager() {
-        println!("Default file manager: {:?}", fm);
-    } else {
-        eprintln!("Failed to detect file manager.");
-    }
-}
-
-#[test]
-fn test_open_folder_and_select_file() {
-    let project_dir = env!("CARGO_MANIFEST_DIR");
-    let file_name = "Cargo.toml";
-    open_folder_and_select_file(project_dir, file_name).unwrap()
 }
 
 /// 异步计算文件的 SHA256 哈希值

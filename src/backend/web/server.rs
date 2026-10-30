@@ -1,75 +1,20 @@
-use crate::assets::Assets;
+use std::sync::{Arc, Mutex};
+
+use actix_web::{App, HttpServer, web};
+use log::{error, info, warn};
+use tokio::runtime::Handle;
+use tokio::sync::oneshot;
+
 use crate::backend::db::SqliteDatabaseSource;
-use crate::backend::entities::prelude::Shares;
 use crate::backend::web::handlers::downloads::{get_icon_for_mime_type, stream_download};
+use crate::backend::web::handlers::pages::index;
+use crate::backend::web::handlers::shares::get_shares;
 use crate::backend::web::handlers::uploads::{complete_upload, init_upload, upload_chunk};
 use crate::backend::web::server::ServerState::{Off, On};
-use crate::setting::Settings;
-use actix_web::error::ErrorInternalServerError;
-use actix_web::http::header::ContentType;
-use actix_web::{App, HttpResponse, HttpServer, Responder, Result, get, mime, post, web};
-use log::{error, info, warn};
-use mime_guess2::MimeGuess;
-use sea_orm::{DatabaseConnection, EntityTrait};
-use serde::Serialize;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::thread::spawn;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::{Receiver, Sender};
+use crate::settings::Settings;
 
-#[derive(Debug, Serialize)]
-struct ShareItem {
-    id: String,
-    file_name: String,
-    mime_type: String,
-}
-
-#[get("/web/{path:.*}")]
-async fn index(path: web::Path<String>) -> impl Responder {
-    let path = path.into_inner();
-    info!("Accept request: GET /web/{}", path);
-
-    let file_path = format!("web/{}", path);
-    let data = Assets::get(&file_path);
-    if data.is_none() {
-        return HttpResponse::NotFound().finish();
-    }
-    let buf = data.unwrap().data;
-    let mime = MimeGuess::from_path(file_path)
-        .first()
-        .map(|m| m.to_string());
-    if let Some(mime_type) = mime {
-        return HttpResponse::Ok()
-            .content_type(ContentType(mime::Mime::from_str(&mime_type).unwrap()))
-            .body(buf);
-    }
-    HttpResponse::Ok().body(buf)
-}
-
-#[post("/shares")]
-async fn get_shares(conn: web::Data<DatabaseConnection>) -> Result<impl Responder> {
-    info!("Accept request: POST /shares");
-
-    let result = Shares::find().all(conn.get_ref()).await;
-    if let Err(e) = result {
-        error!("Failed to query shares, {e}");
-        return Err(ErrorInternalServerError(e));
-    }
-    let share_list = result.unwrap();
-    let share_list: Vec<ShareItem> = share_list
-        .iter()
-        .map(|item| ShareItem {
-            id: item.id.to_string(),
-            file_name: item.file_name.clone(),
-            mime_type: item.mime_type.clone(),
-        })
-        .collect();
-    Ok(web::Json(share_list))
-}
-
-type ShutdownSignalSender = Sender<()>;
-type ShutdownSignalReceiver = Receiver<()>;
+type ShutdownSignalSender = oneshot::Sender<()>;
+type ShutdownSignalReceiver = oneshot::Receiver<()>;
 
 struct ShutdownToken {
     sender: ShutdownSignalSender,
@@ -82,21 +27,17 @@ impl ShutdownToken {
     }
 
     fn shutdown(self) {
-        info!("Sending shutdown signal...");
-        if let Err(e) = self.sender.send(()) {
-            error!("Failed to send shutdown signal to backend, {:?}", e);
+        info!("Sending HTTP server shutdown signal");
+        if let Err(error) = self.sender.send(()) {
+            error!("Failed to send HTTP server shutdown signal: {error:?}");
         }
     }
 }
 
-async fn receive_shutdown_signal(shutdown_signal_receiver: ShutdownSignalReceiver) {
-    match shutdown_signal_receiver.await {
-        Ok(_) => {
-            info!("Received shutdown signal");
-        }
-        Err(e) => {
-            error!("The shutdown signal sender dropped, {e}");
-        }
+async fn receive_shutdown_signal(receiver: ShutdownSignalReceiver) {
+    match receiver.await {
+        Ok(()) => info!("Received HTTP server shutdown signal"),
+        Err(error) => error!("HTTP server shutdown signal sender dropped: {error}"),
     }
 }
 
@@ -104,10 +45,13 @@ async fn start_server(
     settings: Settings,
     shutdown_signal_receiver: ShutdownSignalReceiver,
     datasource: Arc<SqliteDatabaseSource>,
-) -> std::io::Result<()> {
-    let connection = datasource.clone().connection().await.unwrap();
+) -> anyhow::Result<()> {
+    let connection = datasource.connection().await?;
     let settings = Arc::new(settings);
     let port = settings.port;
+
+    info!("Starting HTTP server on 0.0.0.0:{port}");
+
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(connection.clone()))
@@ -121,25 +65,35 @@ async fn start_server(
             .service(complete_upload)
     })
     .shutdown_signal(receive_shutdown_signal(shutdown_signal_receiver))
-    .bind(format!("[::]:{}", port))?
+    .bind(("0.0.0.0", port))?
     .run()
-    .await
+    .await?;
+
+    info!("HTTP server stopped");
+    Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ServerState {
     On,
     Off,
 }
 
+impl ServerState {
+    pub fn is_on(self) -> bool {
+        matches!(self, On)
+    }
+}
+
+/// Controls the embedded Actix HTTP server from the GPUI application.
 pub struct ShareServer {
-    runtime: tokio::runtime::Handle,
+    runtime: Handle,
     server_state: Arc<Mutex<ServerState>>,
     shutdown_token: Option<ShutdownToken>,
 }
 
 impl ShareServer {
-    pub fn new(runtime: tokio::runtime::Handle) -> Self {
+    pub fn new(runtime: Handle) -> Self {
         Self {
             runtime,
             server_state: Arc::new(Mutex::new(Off)),
@@ -147,45 +101,61 @@ impl ShareServer {
         }
     }
 
+    /// Start the server unless it is already running.
     pub fn start(&mut self, settings: Settings, datasource: Arc<SqliteDatabaseSource>) {
-        let mut server_state = self.server_state.lock().unwrap();
+        let mut server_state = match self.server_state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
         if *server_state == On {
-            warn!("The backend is already up, do not start again!");
+            warn!("The HTTP server is already running");
             return;
         }
 
         let (shutdown_token, shutdown_signal_receiver) = ShutdownToken::new();
         self.shutdown_token = Some(shutdown_token);
         *server_state = On;
+        drop(server_state);
 
-        let server_state = self.server_state.clone();
+        let state = self.server_state.clone();
         let runtime = self.runtime.clone();
-        spawn(move || {
-            if let Err(e) = runtime.block_on(async {
-                start_server(settings, shutdown_signal_receiver, datasource).await
-            }) {
-                error!("Failed to start backend, {e}");
-                let mut server_state = server_state.lock().unwrap();
-                *server_state = Off;
+        // Actix's server future is not `Send`, so it runs on a dedicated
+        // thread with the shared Tokio runtime rather than `Handle::spawn`.
+        std::thread::spawn(move || {
+            if let Err(error) =
+                runtime.block_on(start_server(settings, shutdown_signal_receiver, datasource))
+            {
+                error!("Failed to start HTTP server: {error:#}");
+                *state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Off;
             }
         });
     }
 
     pub fn state(&self) -> ServerState {
-        let server_state = self.server_state.lock().unwrap();
-        *server_state
+        *self
+            .server_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Stop the server if it is running.
     pub fn stop(&mut self) {
-        let mut server_state = self.server_state.lock().unwrap();
+        let mut server_state = match self.server_state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
         if *server_state == Off {
-            warn!("The backend is already down, do not stop again!");
+            warn!("The HTTP server is already stopped");
             return;
         }
 
         if let Some(shutdown_token) = self.shutdown_token.take() {
             shutdown_token.shutdown();
-            *server_state = Off;
         }
+        *server_state = Off;
     }
 }

@@ -1,8 +1,8 @@
-use crate::backend::db::repository::{
+use crate::backend::repository::uploads::{
     Chunk, UploadItem, delete_chunk_by_id, delete_upload_item, get_chunk_by_number,
     get_upload_chunks, get_upload_item, insert_chunk, insert_upload_item, update_upload_item,
 };
-use crate::setting::Settings;
+use crate::settings::Settings;
 use crate::util;
 use crate::util::{
     check_file, check_file_hash, delete_file_if_exists, exists_file, get_available_filename,
@@ -14,7 +14,6 @@ use chrono::Local;
 use futures::AsyncWriteExt;
 use futures_util::AsyncReadExt;
 use log::{error, info, warn};
-use sea_orm::strum::{Display as StrumDisplay, EnumString};
 use sea_orm::{DatabaseConnection, IntoActiveModel, Set};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -25,10 +24,37 @@ use std::sync::Arc;
 const CHUNK_FILE_PREFIX: &str = "chunk_";
 
 /// 上传状态枚举
-#[derive(EnumString, StrumDisplay, Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 enum UploadStatus {
     Uploading,
     Completed,
+}
+
+impl UploadStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Uploading => "Uploading",
+            Self::Completed => "Completed",
+        }
+    }
+}
+
+impl std::fmt::Display for UploadStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for UploadStatus {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Uploading" => Ok(Self::Uploading),
+            "Completed" => Ok(Self::Completed),
+            other => Err(anyhow!("Unknown upload status: {other}")),
+        }
+    }
 }
 
 /// 初始化上传请求结构
@@ -397,7 +423,7 @@ pub async fn complete_upload(
     let connection_ref = connection.get_ref();
 
     // 获取文件元数据
-    let mut upload_item = match get_upload_item(connection_ref, &upload_id).await {
+    let upload_item = match get_upload_item(connection_ref, upload_id).await {
         Ok(Some(meta)) => meta,
         Ok(None) => return HttpResponse::NotFound().body("File not found"),
         Err(e) => {
@@ -454,7 +480,7 @@ async fn merge_chunks<P: AsRef<Path>>(
         .context("Failed to create output file")?;
 
     let mut chunks = get_upload_chunks(connection, &upload_item.id).await?;
-    chunks.sort_by(|x, y| x.chunk_number.cmp(&y.chunk_number));
+    chunks.sort_by_key(|chunk| chunk.chunk_number);
 
     // 计算已上传切片的大小并校验
     let total_size: i64 = chunks.iter().map(|c| c.chunk_size).sum();
