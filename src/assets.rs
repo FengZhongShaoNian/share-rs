@@ -10,7 +10,7 @@ use rust_embed::RustEmbed;
 /// the application never has to know about the individual icon bundles.
 #[derive(RustEmbed)]
 #[folder = "assets"]
-#[include = "icons/mimes/**/*"]
+#[include = "icons/**/*"]
 #[include = "web/**/*"]
 struct ApplicationAssets;
 

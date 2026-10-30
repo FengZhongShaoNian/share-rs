@@ -69,6 +69,8 @@ impl AppRoot {
         let add_file_list = self.file_list.clone();
 
         TitleBar::new()
+            .h_11()
+            .bg(cx.theme().background)
             .child(
                 h_flex()
                     .gap_3()

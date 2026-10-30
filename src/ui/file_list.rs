@@ -256,7 +256,7 @@ impl ListDelegate for ShareListDelegate {
                         )
                         .child(
                             Button::new(("remove-file", ix.row))
-                                .icon(Icon::new(IconName::Delete).text_color(cx.theme().danger))
+                                .icon(Icon::default().path("icons/delete.svg").text_color(cx.theme().danger))
                                 .tooltip(t!("tooltip.remove-file-from-share-list"))
                                 .ghost()
                                 .on_click(move |_, _, cx| {
