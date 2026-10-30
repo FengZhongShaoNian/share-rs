@@ -4,19 +4,38 @@ use gpui_kit::component::empty::{
     Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
 };
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, h_flex};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{ActiveTheme, Icon, IconName, WindowExt, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, Global, ImageSource, IntoElement, PathPromptOptions, Render, Resource,
-    Styled, TextOverflow, WeakEntity, Window, div, img, px,
+    App, Context, Entity, ExternalPaths, Global, ImageSource, IntoElement, PathPromptOptions,
+    Render, Resource, Styled, TextOverflow, WeakEntity, Window, div, img, px,
 };
 use log::{error, warn};
 use rust_i18n::t;
+use std::path::PathBuf;
 
 use crate::backend::db::DatabaseSource;
 use crate::backend::repository::shares::{self, ShareFile};
 use crate::gpui_tokio::Tokio;
 use crate::mimes::get_icon_for_mime;
+
+/// Split native drag paths into files that can be shared and the number of
+/// entries that were skipped (for example, folders).
+fn partition_dropped_paths(paths: &[PathBuf]) -> (Vec<PathBuf>, usize) {
+    let mut files = Vec::new();
+    let mut skipped = 0;
+
+    for path in paths {
+        if path.is_file() {
+            files.push(path.clone());
+        } else {
+            skipped += 1;
+        }
+    }
+
+    (files, skipped)
+}
 
 /// Points at the active file list so non-view code (the single-instance
 /// listener and command-line file opener) can ask it to refresh.
@@ -97,8 +116,6 @@ impl FileListPage {
             prompt: Some(t!("label.choose-files").into_owned().into()),
         });
 
-        let database = cx.global::<DatabaseSource>().instance.clone();
-
         cx.spawn(async move |this, cx| {
             let paths = match paths.await {
                 Ok(Ok(Some(paths))) => paths,
@@ -113,23 +130,52 @@ impl FileListPage {
                 }
             };
 
+            let _ = this.update(cx, |page, cx| page.import_paths(paths, cx));
+        })
+        .detach();
+    }
+
+    /// Add files that were dropped from the system file manager.
+    ///
+    /// GPUI turns a native file drag into a normal internal drag whose value is
+    /// [`ExternalPaths`], so this is also the drop path for future in-app drags
+    /// that expose real paths.
+    pub fn import_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if paths.is_empty() {
+            return;
+        }
+
+        self.request_id = self.request_id.wrapping_add(1);
+        let request_id = self.request_id;
+        let database = cx.global::<DatabaseSource>().instance.clone();
+
+        self.set_loading(true, cx);
+        cx.spawn(async move |this, cx| {
             let result = Tokio::spawn(cx, async move {
                 let connection = database.connection().await?;
-                Ok::<_, anyhow::Error>(shares::add_many(&connection, paths).await)
+                let added = shares::add_many(&connection, paths).await;
+                let items = shares::list(&connection).await?;
+                Ok::<_, anyhow::Error>((added, items))
             })
             .await;
 
-            match result {
-                Ok(Ok(items)) => {
-                    if items.is_empty() {
-                        warn!("No files were added from the picker");
-                    }
+            let _ = this.update(cx, |page, cx| {
+                if page.request_id != request_id {
+                    return;
                 }
-                Ok(Err(error)) => error!("Failed to add selected files: {error:#}"),
-                Err(error) => error!("Add files task failed: {error}"),
-            }
 
-            let _ = this.update(cx, |page, cx| page.reload_from_database(cx));
+                page.set_loading(false, cx);
+                match result {
+                    Ok(Ok((added, items))) => {
+                        if added.is_empty() {
+                            warn!("No files were added to the share list");
+                        }
+                        page.set_items(items, cx);
+                    }
+                    Ok(Err(error)) => error!("Failed to add files: {error:#}"),
+                    Err(error) => error!("Add files task failed: {error}"),
+                }
+            });
         })
         .detach();
     }
@@ -182,8 +228,25 @@ impl FileListPage {
 impl Render for FileListPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .id("share-list-drop-zone")
             .size_full()
             .bg(cx.theme().background)
+            .drag_over::<ExternalPaths>(|style, _, _, cx| {
+                style
+                    .bg(cx.theme().tokens.drop_target)
+                    .border_2()
+                    .border_color(cx.theme().primary)
+            })
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                let (files, skipped) = partition_dropped_paths(paths.paths());
+                if skipped > 0 {
+                    window.push_notification(
+                        Notification::warning(t!("notification.folders-not-supported").to_string()),
+                        cx,
+                    );
+                }
+                this.import_paths(files, cx);
+            }))
             .child(List::new(&self.list_state).size_full())
     }
 }
@@ -256,7 +319,11 @@ impl ListDelegate for ShareListDelegate {
                         )
                         .child(
                             Button::new(("remove-file", ix.row))
-                                .icon(Icon::default().path("icons/delete.svg").text_color(cx.theme().danger))
+                                .icon(
+                                    Icon::default()
+                                        .path("icons/delete.svg")
+                                        .text_color(cx.theme().danger),
+                                )
                                 .tooltip(t!("tooltip.remove-file-from-share-list"))
                                 .ghost()
                                 .on_click(move |_, _, cx| {
@@ -301,5 +368,22 @@ impl ListDelegate for ShareListDelegate {
         _window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) {
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::partition_dropped_paths;
+    use std::path::PathBuf;
+
+    #[test]
+    fn dropped_paths_keep_files_and_skip_directories() {
+        let project_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let file = project_dir.join("Cargo.toml");
+
+        let (files, skipped) = partition_dropped_paths(&[file.clone(), project_dir]);
+
+        assert_eq!(files, vec![file]);
+        assert_eq!(skipped, 1);
     }
 }

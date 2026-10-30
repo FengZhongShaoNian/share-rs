@@ -69,8 +69,8 @@ label.empty-share-list:
   en: Nothing shared yet
   zh-CN: 还没有分享文件
 label.empty-share-list-hint:
-  en: Add files to make them available on your local network.
-  zh-CN: 添加文件后，局域网内的设备即可访问。
+  en: Add files, or drag them here, to make them available on your local network.
+  zh-CN: 添加文件，或将文件拖到这里，即可在局域网内分享。
 notification.invalid-port:
   en: Please enter a port between 1 and 65535.
   zh-CN: 请输入 1 到 65535 之间的端口号。
@@ -92,3 +92,6 @@ notification.server-stopped:
 notification.url-copied:
   en: Address copied to the clipboard.
   zh-CN: 地址已复制到剪贴板。
+notification.folders-not-supported:
+  en: Only files can be shared. Folders were skipped.
+  zh-CN: 只能分享文件，已跳过文件夹。
